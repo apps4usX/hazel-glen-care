@@ -1,0 +1,57 @@
+# PRODUCTION Render Blueprint for Hazel Glen Care.
+# For the real launch: always-on paid services, a persistent disk for uploads,
+# a backed-up Postgres plan, and Prisma migrations.
+#
+# To use it: on your production branch, replace render.yaml with this file's
+# contents (Render only reads a file named render.yaml), then deploy the
+# Blueprint. Full steps in DEPLOY-PRODUCTION.md.
+
+databases:
+  - name: hazel-glen-db-prod
+    databaseName: hazelglen
+    user: hazel
+    plan: basic_256mb          # paid: daily backups + persistence (resize anytime)
+
+services:
+  # ---- Backend API ----
+  - type: web
+    name: hazel-glen-api-prod
+    runtime: node
+    plan: starter              # always-on (no cold-start sleep)
+    rootDir: backend
+    buildCommand: npm install && npx prisma generate
+    # Apply migrations if present; fall back to a schema push on the very first
+    # deploy (before you've committed a migrations folder). Then start.
+    startCommand: sh -c "npx prisma migrate deploy || npx prisma db push --skip-generate; node src/server.js"
+    healthCheckPath: /api/health
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: DATABASE_URL
+        fromDatabase:
+          name: hazel-glen-db-prod
+          property: connectionString
+      - key: JWT_SECRET
+        generateValue: true
+      - key: CORS_ORIGIN
+        sync: false            # set to your production web URL / custom domain
+      - key: UPLOAD_DIR
+        value: /var/data/uploads
+    disk:
+      name: uploads
+      mountPath: /var/data     # persistent — clock-in selfies survive redeploys
+      sizeGB: 5
+
+  # ---- Frontend ----
+  - type: web
+    name: hazel-glen-web-prod
+    runtime: node
+    plan: starter
+    rootDir: frontend
+    buildCommand: npm install && npm run build
+    startCommand: npx next start -p $PORT
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: NEXT_PUBLIC_API_URL
+        sync: false            # set to your API URL / custom domain + /api, then redeploy

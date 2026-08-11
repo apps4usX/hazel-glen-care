@@ -1,0 +1,16 @@
+# dependencies
+node_modules/
+# builds
+.next/
+dist/
+build/
+# runtime uploads (selfies, profile photos)
+backend/uploads/
+uploads/
+# env / secrets (keep the *.example templates)
+.env
+.env.*
+!*.example
+# logs & os
+*.log
+.DS_Store
