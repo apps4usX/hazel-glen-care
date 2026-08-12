@@ -26,3 +26,4 @@ EXPOSE 4000
 # which avoids needing committed migration files for first-run. Swap to
 # `prisma migrate deploy` once you generate migrations with `prisma migrate dev`.
 CMD ["sh", "-c", "npx prisma db push --skip-generate && node src/server.js"]
+EXPOSE 10000
