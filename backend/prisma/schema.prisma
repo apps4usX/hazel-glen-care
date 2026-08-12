@@ -1,0 +1,748 @@
+// ============================================================================
+//  Hazel Glen Care — Prisma schema (PostgreSQL)
+//  Nursing agency operating system: staff, clients, scheduling, compliance,
+//  recruitment, invoicing, messaging, notifications, reporting, AI.
+//  Master Prompt 3 — data model.
+// ============================================================================
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ---------------------------------------------------------------------------
+//  ENUMS
+// ---------------------------------------------------------------------------
+
+enum Role {
+  ADMIN
+  STAFF
+  CLIENT
+}
+
+enum StaffStatus {
+  PENDING      // onboarding / not yet cleared
+  ACTIVE
+  INACTIVE
+  SUSPENDED
+}
+
+enum EmploymentType {
+  FULL_TIME
+  PART_TIME
+  CASUAL
+  CONTRACT
+}
+
+enum CareType {
+  NURSING_AGENCY
+  DEMENTIA_CARE
+  GENERAL_CARE
+  HOME_CARE
+}
+
+enum SkillLevel {
+  BEGINNER
+  INTERMEDIATE
+  ADVANCED
+  EXPERT
+}
+
+enum DayOfWeek {
+  MONDAY
+  TUESDAY
+  WEDNESDAY
+  THURSDAY
+  FRIDAY
+  SATURDAY
+  SUNDAY
+}
+
+enum DocumentType {
+  ID_DOCUMENT
+  QUALIFICATION
+  CERTIFICATION
+  SANC_REGISTRATION   // SA Nursing Council
+  POLICE_CLEARANCE
+  REFERENCE
+  CONTRACT
+  MEDICAL
+  OTHER
+}
+
+enum DocumentStatus {
+  PENDING
+  VERIFIED
+  REJECTED
+  EXPIRED
+}
+
+enum ShiftStatus {
+  DRAFT
+  OPEN
+  PARTIALLY_FILLED
+  FILLED
+  IN_PROGRESS
+  COMPLETED
+  CANCELLED
+}
+
+enum AssignmentStatus {
+  PROPOSED     // system suggested
+  OFFERED      // sent to staff
+  ACCEPTED
+  DECLINED
+  CONFIRMED
+  CHECKED_IN
+  COMPLETED
+  NO_SHOW
+  CANCELLED
+}
+
+enum ShiftRequestStatus {
+  PENDING
+  APPROVED
+  REJECTED
+  FULFILLED
+  CANCELLED
+}
+
+enum TimesheetStatus {
+  DRAFT
+  SUBMITTED
+  APPROVED
+  REJECTED
+  PAID
+}
+
+enum InvoiceStatus {
+  DRAFT
+  SENT
+  PARTIALLY_PAID
+  PAID
+  OVERDUE
+  VOID
+}
+
+enum ClientType {
+  INDIVIDUAL
+  FAMILY
+  FACILITY
+  HOSPITAL
+}
+
+enum JobStatus {
+  DRAFT
+  OPEN
+  CLOSED
+  FILLED
+}
+
+enum ApplicationStatus {
+  RECEIVED
+  SCREENING
+  SHORTLISTED
+  INTERVIEW
+  OFFER
+  HIRED
+  REJECTED
+  WITHDRAWN
+}
+
+enum MessageStatus {
+  SENT
+  DELIVERED
+  READ
+}
+
+enum NotificationChannel {
+  IN_APP
+  EMAIL
+  SMS
+  PUSH
+}
+
+enum NotificationStatus {
+  PENDING
+  SENT
+  FAILED
+  READ
+}
+
+enum ReportType {
+  SHIFTS
+  FINANCE
+  COMPLIANCE
+  RECRUITMENT
+  STAFF
+  CUSTOM
+}
+
+enum AIRecommendationType {
+  STAFF_MATCH
+  APPLICANT_SCREENING
+  COMPLIANCE_ALERT
+  REPORT_INSIGHT
+}
+
+enum AIRecommendationStatus {
+  NEW
+  REVIEWED
+  ACTED
+  DISMISSED
+}
+
+// ---------------------------------------------------------------------------
+//  AUTH — single sign-in anchor, role-based (JWT payload built from this)
+// ---------------------------------------------------------------------------
+
+model User {
+  id            String   @id @default(cuid())
+  email         String   @unique
+  passwordHash  String
+  role          Role     @default(STAFF)
+  isActive      Boolean  @default(true)
+  lastLoginAt   DateTime?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  // one auth user maps to at most one staff OR one client-portal profile
+  staff             Staff?
+  clientPortalUser  ClientPortalUser?
+
+  sentMessages      Message[]        @relation("MessageSender")
+  receivedMessages  Message[]        @relation("MessageRecipient")
+  notifications     Notification[]
+  reports           Report[]         @relation("ReportAuthor")
+  verifiedDocuments StaffDocument[]  @relation("DocumentVerifier")
+  approvedTimesheets StaffTimesheet[] @relation("TimesheetApprover")
+  createdShifts     Shift[]          @relation("ShiftCreator")
+
+  @@index([role])
+  @@map("users")
+}
+
+// ---------------------------------------------------------------------------
+//  STAFF
+// ---------------------------------------------------------------------------
+
+model Staff {
+  id             String         @id @default(cuid())
+  userId         String         @unique
+  user           User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  firstName      String
+  lastName       String
+  phone          String?
+  dateOfBirth    DateTime?
+  idNumber       String?        @unique          // SA ID number
+  addressLine1   String?
+  addressLine2   String?
+  city           String?
+  province       String?
+  postalCode     String?
+  latitude       Float?
+  longitude      Float?
+
+  jobTitle       String?                          // e.g. Registered Nurse, Carer
+  photoUrl       String?                          // profile photo (/uploads/profiles/…) — optional
+  employmentType EmploymentType @default(CASUAL)
+  status         StaffStatus    @default(PENDING)
+  hourlyRate     Decimal?       @db.Decimal(10, 2)
+  bio            String?
+  rating         Float?                           // rolling average of shift ratings
+  hiredAt        DateTime?
+
+  createdAt      DateTime       @default(now())
+  updatedAt      DateTime       @updatedAt
+
+  availability   StaffAvailability[]
+  skills         StaffSkill[]
+  documents      StaffDocument[]
+  timesheets     StaffTimesheet[]
+  assignments    ShiftAssignment[]
+  application    Application?   @relation("ApplicationToStaff")
+  recommendations AIRecommendation[] @relation("RecommendationStaff")
+
+  @@index([status])
+  @@index([city, province])
+  @@map("staff")
+}
+
+model StaffAvailability {
+  id          String    @id @default(cuid())
+  staffId     String
+  staff       Staff     @relation(fields: [staffId], references: [id], onDelete: Cascade)
+
+  dayOfWeek   DayOfWeek?          // for recurring weekly availability
+  specificDate DateTime?          // for one-off date availability
+  startTime   String             // "HH:mm" local time
+  endTime     String             // "HH:mm" local time
+  isRecurring Boolean   @default(true)
+  isAvailable Boolean   @default(true)   // false = explicit block-out
+
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  @@index([staffId, dayOfWeek])
+  @@index([staffId, specificDate])
+  @@map("staff_availability")
+}
+
+model StaffSkill {
+  id             String     @id @default(cuid())
+  staffId        String
+  staff          Staff      @relation(fields: [staffId], references: [id], onDelete: Cascade)
+
+  name           String                          // e.g. Wound Care, Dementia Care
+  category       String?                         // grouping
+  level          SkillLevel @default(INTERMEDIATE)
+  yearsExperience Int?
+
+  createdAt      DateTime   @default(now())
+
+  @@unique([staffId, name])
+  @@index([name])
+  @@map("staff_skills")
+}
+
+model StaffDocument {
+  id           String         @id @default(cuid())
+  staffId      String
+  staff        Staff          @relation(fields: [staffId], references: [id], onDelete: Cascade)
+
+  type         DocumentType
+  name         String
+  fileUrl      String
+  status       DocumentStatus @default(PENDING)
+  issuedAt     DateTime?
+  expiresAt    DateTime?                          // drives compliance-expiry alerts
+  verifiedAt   DateTime?
+  verifiedById String?
+  verifiedBy   User?          @relation("DocumentVerifier", fields: [verifiedById], references: [id])
+  notes        String?
+
+  createdAt    DateTime       @default(now())
+  updatedAt    DateTime       @updatedAt
+
+  @@index([staffId, type])
+  @@index([status])
+  @@index([expiresAt])
+  @@map("staff_documents")
+}
+
+model StaffTimesheet {
+  id                 String           @id @default(cuid())
+  staffId            String
+  staff              Staff            @relation(fields: [staffId], references: [id], onDelete: Cascade)
+  shiftAssignmentId  String?          @unique
+  shiftAssignment    ShiftAssignment? @relation(fields: [shiftAssignmentId], references: [id])
+
+  workDate           DateTime
+  startTime          DateTime
+  endTime            DateTime
+  breakMinutes       Int              @default(0)
+  hoursWorked        Decimal          @db.Decimal(6, 2)
+  status             TimesheetStatus  @default(DRAFT)
+  submittedAt        DateTime?
+  approvedById       String?
+  approvedBy         User?            @relation("TimesheetApprover", fields: [approvedById], references: [id])
+  approvedAt         DateTime?
+  notes              String?
+
+  createdAt          DateTime         @default(now())
+  updatedAt          DateTime         @updatedAt
+
+  @@index([staffId, status])
+  @@index([workDate])
+  @@map("staff_timesheets")
+}
+
+// ---------------------------------------------------------------------------
+//  CLIENTS
+// ---------------------------------------------------------------------------
+
+model Client {
+  id            String     @id @default(cuid())
+  name          String
+  type          ClientType @default(INDIVIDUAL)
+  contactName   String?
+  email         String?
+  phone         String?
+  addressLine1  String?
+  addressLine2  String?
+  city          String?
+  province      String?
+  postalCode    String?
+  latitude      Float?
+  longitude     Float?
+  billingEmail  String?
+  vatNumber     String?
+  notes         String?
+  isActive      Boolean    @default(true)
+
+  createdAt     DateTime   @default(now())
+  updatedAt     DateTime   @updatedAt
+
+  portalUsers   ClientPortalUser[]
+  shifts        Shift[]
+  shiftRequests ShiftRequest[]
+  invoices      Invoice[]
+
+  @@index([city, province])
+  @@map("clients")
+}
+
+model ClientPortalUser {
+  id         String   @id @default(cuid())
+  userId     String   @unique
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  clientId   String
+  client     Client   @relation(fields: [clientId], references: [id], onDelete: Cascade)
+
+  firstName  String
+  lastName   String
+  phone      String?
+  jobTitle   String?              // e.g. Care Manager
+  isPrimary  Boolean  @default(false)
+
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  shiftRequests ShiftRequest[] @relation("RequestedBy")
+
+  @@index([clientId])
+  @@map("client_portal_users")
+}
+
+// ---------------------------------------------------------------------------
+//  SCHEDULING
+// ---------------------------------------------------------------------------
+
+model Shift {
+  id             String      @id @default(cuid())
+  clientId       String
+  client         Client      @relation(fields: [clientId], references: [id])
+  shiftRequestId String?
+  shiftRequest   ShiftRequest? @relation(fields: [shiftRequestId], references: [id])
+
+  title          String
+  careType       CareType
+  location       String?
+  addressLine1   String?
+  city           String?
+  province       String?
+  latitude       Float?
+  longitude      Float?
+
+  startAt        DateTime
+  endAt          DateTime
+  breakMinutes   Int         @default(0)
+  headcount      Int         @default(1)          // number of staff required
+  requiredSkill  String?
+  payRate        Decimal?    @db.Decimal(10, 2)   // paid to staff / hour
+  chargeRate     Decimal?    @db.Decimal(10, 2)   // billed to client / hour
+  status         ShiftStatus @default(DRAFT)
+  isEmergency    Boolean     @default(false)
+  notes          String?
+
+  createdById    String?
+  createdBy      User?       @relation("ShiftCreator", fields: [createdById], references: [id])
+
+  createdAt      DateTime    @default(now())
+  updatedAt      DateTime    @updatedAt
+
+  assignments    ShiftAssignment[]
+  invoiceItems   InvoiceItem[]
+  recommendations AIRecommendation[] @relation("RecommendationShift")
+
+  @@index([status])
+  @@index([startAt])
+  @@index([clientId])
+  @@index([careType])
+  @@map("shifts")
+}
+
+model ShiftAssignment {
+  id           String           @id @default(cuid())
+  shiftId      String
+  shift        Shift            @relation(fields: [shiftId], references: [id], onDelete: Cascade)
+  staffId      String
+  staff        Staff           @relation(fields: [staffId], references: [id])
+
+  status       AssignmentStatus @default(PROPOSED)
+  matchScore   Float?                              // from AI matching service
+  offeredAt    DateTime?
+  respondedAt  DateTime?
+  confirmedAt  DateTime?
+  checkInAt    DateTime?
+  checkOutAt   DateTime?
+  checkInLat   Float?                              // clock-in GPS + selfie (attendance verification)
+  checkInLng   Float?
+  checkInPhoto String?                             // /uploads/attendance/… path to the clock-in selfie
+  checkOutLat  Float?
+  checkOutLng  Float?
+  checkOutPhoto String?                            // /uploads/attendance/… path to the clock-out selfie
+  attendanceConsentAt DateTime?                    // POPIA: when the worker consented to photo + location capture
+  clientRating Int?                                // 1-5 rating of this shift
+  notes        String?
+
+  createdAt    DateTime         @default(now())
+  updatedAt    DateTime         @updatedAt
+
+  timesheet    StaffTimesheet?
+
+  @@unique([shiftId, staffId])
+  @@index([staffId, status])
+  @@index([status])
+  @@map("shift_assignments")
+}
+
+model ShiftRequest {
+  id             String             @id @default(cuid())
+  clientId       String
+  client         Client             @relation(fields: [clientId], references: [id])
+  requestedById  String?
+  requestedBy    ClientPortalUser?  @relation("RequestedBy", fields: [requestedById], references: [id])
+
+  careType       CareType
+  title          String?
+  startAt        DateTime
+  endAt          DateTime
+  headcount      Int                @default(1)
+  requiredSkill  String?
+  status         ShiftRequestStatus @default(PENDING)
+  notes          String?
+
+  createdAt      DateTime           @default(now())
+  updatedAt      DateTime           @updatedAt
+
+  shifts         Shift[]
+
+  @@index([clientId, status])
+  @@index([startAt])
+  @@map("shift_requests")
+}
+
+// ---------------------------------------------------------------------------
+//  FINANCE
+// ---------------------------------------------------------------------------
+
+model Invoice {
+  id            String        @id @default(cuid())
+  invoiceNumber String        @unique
+  clientId      String
+  client        Client        @relation(fields: [clientId], references: [id])
+
+  status        InvoiceStatus @default(DRAFT)
+  currency      String        @default("ZAR")
+  issueDate     DateTime      @default(now())
+  dueDate       DateTime?
+  subtotal      Decimal       @default(0) @db.Decimal(12, 2)
+  taxRate       Decimal       @default(15) @db.Decimal(5, 2)   // SA VAT %
+  taxAmount     Decimal       @default(0) @db.Decimal(12, 2)
+  total         Decimal       @default(0) @db.Decimal(12, 2)
+  amountPaid    Decimal       @default(0) @db.Decimal(12, 2)
+  notes         String?
+  paidAt        DateTime?
+
+  createdAt     DateTime      @default(now())
+  updatedAt     DateTime      @updatedAt
+
+  items         InvoiceItem[]
+
+  @@index([clientId, status])
+  @@index([dueDate])
+  @@map("invoices")
+}
+
+model InvoiceItem {
+  id                String           @id @default(cuid())
+  invoiceId         String
+  invoice           Invoice          @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+
+  description       String
+  quantity          Decimal          @default(1) @db.Decimal(10, 2)   // e.g. hours
+  unitPrice         Decimal          @db.Decimal(10, 2)
+  amount            Decimal          @db.Decimal(12, 2)
+
+  shiftId           String?
+  shift             Shift?           @relation(fields: [shiftId], references: [id])
+
+  createdAt         DateTime         @default(now())
+
+  @@index([invoiceId])
+  @@map("invoice_items")
+}
+
+// ---------------------------------------------------------------------------
+//  RECRUITMENT
+// ---------------------------------------------------------------------------
+
+model JobPost {
+  id             String         @id @default(cuid())
+  title          String
+  slug           String         @unique
+  careType       CareType
+  description    String
+  location       String?
+  city           String?
+  province       String?
+  employmentType EmploymentType @default(CASUAL)
+  salaryMin      Decimal?       @db.Decimal(10, 2)
+  salaryMax      Decimal?       @db.Decimal(10, 2)
+  status         JobStatus      @default(DRAFT)
+  openingsCount  Int            @default(1)
+  closesAt       DateTime?
+
+  createdAt      DateTime       @default(now())
+  updatedAt      DateTime       @updatedAt
+
+  applications   Application[]
+
+  @@index([status])
+  @@index([careType])
+  @@map("job_posts")
+}
+
+model Application {
+  id             String            @id @default(cuid())
+  jobPostId      String?
+  jobPost        JobPost?          @relation(fields: [jobPostId], references: [id])
+
+  firstName      String
+  lastName       String
+  email          String
+  phone          String?
+  coverLetter    String?
+  cvUrl          String?
+  source         String?                            // where they applied from
+  status         ApplicationStatus @default(RECEIVED)
+  aiScore        Float?                             // screening score
+  aiSummary      String?
+  reviewerNotes  String?
+
+  // link once hired
+  hiredStaffId   String?           @unique
+  hiredStaff     Staff?            @relation("ApplicationToStaff", fields: [hiredStaffId], references: [id])
+
+  createdAt      DateTime          @default(now())
+  updatedAt      DateTime          @updatedAt
+
+  documents      ApplicationDocument[]
+  recommendations AIRecommendation[] @relation("RecommendationApplication")
+
+  @@index([status])
+  @@index([jobPostId])
+  @@index([email])
+  @@map("applications")
+}
+
+model ApplicationDocument {
+  id             String       @id @default(cuid())
+  applicationId  String
+  application    Application  @relation(fields: [applicationId], references: [id], onDelete: Cascade)
+
+  type           DocumentType @default(OTHER)
+  name           String
+  fileUrl        String
+  uploadedAt     DateTime     @default(now())
+
+  @@index([applicationId])
+  @@map("application_documents")
+}
+
+// ---------------------------------------------------------------------------
+//  MESSAGING & NOTIFICATIONS
+// ---------------------------------------------------------------------------
+
+model Message {
+  id            String        @id @default(cuid())
+  threadKey     String                                // groups a conversation
+  senderId      String
+  sender        User          @relation("MessageSender", fields: [senderId], references: [id])
+  recipientId   String
+  recipient     User          @relation("MessageRecipient", fields: [recipientId], references: [id])
+
+  body          String
+  status        MessageStatus @default(SENT)
+  readAt        DateTime?
+
+  createdAt     DateTime      @default(now())
+
+  @@index([threadKey])
+  @@index([recipientId, status])
+  @@map("messages")
+}
+
+model Notification {
+  id         String              @id @default(cuid())
+  userId     String
+  user       User                @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  channel    NotificationChannel @default(IN_APP)
+  status     NotificationStatus  @default(PENDING)
+  title      String
+  body       String
+  data       Json?                                    // deep-link payload
+  isRead     Boolean             @default(false)
+  readAt     DateTime?
+  sentAt     DateTime?
+
+  createdAt  DateTime            @default(now())
+
+  @@index([userId, isRead])
+  @@index([status])
+  @@map("notifications")
+}
+
+// ---------------------------------------------------------------------------
+//  REPORTING & AI
+// ---------------------------------------------------------------------------
+
+model Report {
+  id            String     @id @default(cuid())
+  type          ReportType
+  title         String
+  params        Json?
+  summary       String?
+  fileUrl       String?
+  generatedById String?
+  generatedBy   User?      @relation("ReportAuthor", fields: [generatedById], references: [id])
+
+  periodStart   DateTime?
+  periodEnd     DateTime?
+  createdAt     DateTime   @default(now())
+
+  @@index([type])
+  @@map("reports")
+}
+
+model AIRecommendation {
+  id            String                 @id @default(cuid())
+  type          AIRecommendationType
+  status        AIRecommendationStatus @default(NEW)
+  score         Float?
+  rationale     String?
+  payload       Json?
+
+  // optional links to the entity the recommendation is about
+  staffId       String?
+  staff         Staff?       @relation("RecommendationStaff", fields: [staffId], references: [id])
+  applicationId String?
+  application   Application? @relation("RecommendationApplication", fields: [applicationId], references: [id])
+  shiftId       String?
+  shift         Shift?       @relation("RecommendationShift", fields: [shiftId], references: [id])
+
+  createdAt     DateTime     @default(now())
+  updatedAt     DateTime     @updatedAt
+
+  @@index([type, status])
+  @@index([shiftId])
+  @@index([staffId])
+  @@map("ai_recommendations")
+}
